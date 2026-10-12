@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AppFrame Arcade Game</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #09090b;
+      color: #fafafa;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      width: 500px;
+      margin-bottom: 12px;
+      font-size: 15px;
+      font-weight: 700;
+      color: #a1a1aa;
+    }
+    .score-val { color: #38bdf8; font-family: monospace; font-size: 18px; }
+    .lives-val { color: #f43f5e; font-family: monospace; font-size: 18px; }
+    #canvas-container {
+      position: relative;
+      border: 2px solid #27272a;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 0 30px rgba(56, 189, 248, 0.2);
+      background: #080911;
+    }
+    canvas { display: block; }
+    .overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(9, 9, 11, 0.88);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+    }
+    .overlay.hidden { display: none; }
+    h2 { font-size: 28px; margin-bottom: 8px; color: #38bdf8; text-shadow: 0 0 12px rgba(56,189,248,0.5); }
+    p { color: #94a3b8; margin-bottom: 20px; font-size: 14px; text-align: center; max-width: 320px; }
+    .btn {
+      background: #38bdf8;
+      color: #09090b;
+      border: none;
+      padding: 10px 24px;
+      font-weight: 800;
+      font-size: 15px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn:hover { background: #7dd3fc; transform: scale(1.04); }
+    .controls-hint {
+      margin-top: 14px;
+      font-size: 12px;
+      color: #64748b;
+      display: flex;
+      gap: 16px;
+    }
+    .key {
+      background: #27272a;
+      padding: 3px 7px;
+      border-radius: 4px;
+      color: #e2e8f0;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <div>SCORE: <span id="score" class="score-val">0</span></div>
+    <div>LIVES: <span id="lives" class="lives-val">❤❤❤</span></div>
+  </div>
+  <div id="canvas-container">
+    <canvas id="game" width="500" height="400"></canvas>
+    <div id="overlay" class="overlay">
+      <h2 id="overlay-title">APPFRAME ARCADE</h2>
+      <p id="overlay-desc">Defend the sector from incoming meteorites and plasma crystals</p>
+      <button id="start-btn" class="btn">LAUNCH MISSION</button>
+    </div>
+  </div>
+  <div class="controls-hint">
+    <span><span class="key">WASD</span> or <span class="key">ARROWS</span> to Move</span>
+    <span><span class="key">SPACE</span> to Fire</span>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const livesEl = document.getElementById('lives');
+    const overlay = document.getElementById('overlay');
+    const overlayTitle = document.getElementById('overlay-title');
+    const overlayDesc = document.getElementById('overlay-desc');
+    const startBtn = document.getElementById('start-btn');
+
+    let player = { x: 235, y: 340, w: 30, h: 26, speed: 5.5 };
+    let bullets = [];
+    let enemies = [];
+    let particles = [];
+    let stars = [];
+    let score = 0;
+    let lives = 3;
+    let isPlaying = false;
+    let animId = null;
+    let keys = {};
+    let lastShoot = 0;
+
+    for (let i = 0; i < 40; i++) {
+      stars.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        size: Math.random() * 2 + 0.5,
+        speed: Math.random() * 1.5 + 0.5
+      });
+    }
+
+    let audioCtx;
+    function beep(freq, type, dur) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type || 'sine';
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + dur);
+      } catch(e) {}
+    }
+
+    function startGame() {
+      player.x = 235;
+      player.y = 340;
+      bullets = [];
+      enemies = [];
+      particles = [];
+      score = 0;
+      lives = 3;
+      updateHud();
+      isPlaying = true;
+      overlay.classList.add('hidden');
+      if (animId) cancelAnimationFrame(animId);
+      loop();
+    }
+
+    function updateHud() {
+      scoreEl.textContent = score;
+      livesEl.textContent = '❤'.repeat(Math.max(0, lives));
+    }
+
+    function spawnEnemy() {
+      if (Math.random() < 0.04) {
+        enemies.push({
+          x: Math.random() * (canvas.width - 30) + 10,
+          y: -25,
+          w: 22,
+          h: 22,
+          speed: Math.random() * 2 + 2,
+          hp: 1,
+          color: Math.random() > 0.5 ? '#f43f5e' : '#ec4899'
+        });
+      }
+    }
+
+    function createExplosion(x, y, color) {
+      for (let i = 0; i < 14; i++) {
+        particles.push({
+          x, y,
+          vx: (Math.random() - 0.5) * 6,
+          vy: (Math.random() - 0.5) * 6,
+          life: 1,
+          color
+        });
+      }
+    }
+
+    function loop() {
+      if (!isPlaying) return;
+
+      // Controls
+      if ((keys['ArrowLeft'] || keys['a'] || keys['A']) && player.x > 5) player.x -= player.speed;
+      if ((keys['ArrowRight'] || keys['d'] || keys['D']) && player.x + player.w < canvas.width - 5) player.x += player.speed;
+      if ((keys['ArrowUp'] || keys['w'] || keys['W']) && player.y > 50) player.y -= player.speed;
+      if ((keys['ArrowDown'] || keys['s'] || keys['S']) && player.y + player.h < canvas.height - 10) player.y += player.speed;
+
+      if (keys[' '] && Date.now() - lastShoot > 220) {
+        bullets.push({ x: player.x + player.w / 2 - 2, y: player.y - 4, w: 4, h: 10 });
+        beep(700, 'triangle', 0.08);
+        lastShoot = Date.now();
+      }
+
+      // Move stars
+      stars.forEach(s => {
+        s.y += s.speed;
+        if (s.y > canvas.height) s.y = 0;
+      });
+
+      // Bullets
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.y -= 7.5;
+        if (b.y < -15) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        // Enemy collision
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const e = enemies[j];
+          if (b.x < e.x + e.w && b.x + b.w > e.x && b.y < e.y + e.h && b.y + b.h > e.y) {
+            createExplosion(e.x + e.w / 2, e.y + e.h / 2, e.color);
+            beep(350, 'sawtooth', 0.12);
+            score += 25;
+            enemies.splice(j, 1);
+            bullets.splice(i, 1);
+            updateHud();
+            break;
+          }
+        }
+      }
+
+      spawnEnemy();
+
+      // Enemies
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        e.y += e.speed;
+
+        // Player collision
+        if (player.x < e.x + e.w && player.x + player.w > e.x && player.y < e.y + e.h && player.y + player.h > e.y) {
+          createExplosion(player.x + player.w / 2, player.y + player.h / 2, '#38bdf8');
+          beep(180, 'sawtooth', 0.3);
+          lives--;
+          enemies.splice(i, 1);
+          updateHud();
+          if (lives <= 0) {
+            gameOver();
+            return;
+          }
+          continue;
+        }
+
+        if (e.y > canvas.height + 30) {
+          enemies.splice(i, 1);
+        }
+      }
+
+      // Particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 0.04;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+
+      render();
+      animId = requestAnimationFrame(loop);
+    }
+
+    function gameOver() {
+      isPlaying = false;
+      overlayTitle.textContent = 'MISSION FAILED';
+      overlayDesc.textContent = `Final Score: ${score} points!`;
+      startBtn.textContent = 'PLAY AGAIN';
+      overlay.classList.remove('hidden');
+    }
+
+    function render() {
+      ctx.fillStyle = '#080911';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Stars
+      ctx.fillStyle = '#475569';
+      stars.forEach(s => ctx.fillRect(s.x, s.y, s.size, s.size));
+
+      // Bullets
+      ctx.fillStyle = '#38bdf8';
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 8;
+      bullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+
+      // Player Ship
+      ctx.fillStyle = '#0284c7';
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.moveTo(player.x + player.w / 2, player.y);
+      ctx.lineTo(player.x + player.w, player.y + player.h);
+      ctx.lineTo(player.x + player.w / 2, player.y + player.h - 6);
+      ctx.lineTo(player.x, player.y + player.h);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Cockpit
+      ctx.fillStyle = '#e0f2fe';
+      ctx.beginPath();
+      ctx.arc(player.x + player.w / 2, player.y + 12, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Enemies
+      enemies.forEach(e => {
+        ctx.fillStyle = e.color;
+        ctx.shadowColor = e.color;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.roundRect(e.x, e.y, e.w, e.h, 4);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+
+      // Particles
+      particles.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.fillRect(p.x, p.y, 3, 3);
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    window.addEventListener('keydown', e => {
+      keys[e.key] = true;
+      if (e.key === ' ') e.preventDefault();
+    });
+    window.addEventListener('keyup', e => keys[e.key] = false);
+
+    startBtn.addEventListener('click', startGame);
+    render();
+  </script>
+</body>
+</html>
