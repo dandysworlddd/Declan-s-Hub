@@ -26,8 +26,8 @@ export function incrementPlayCount(gameId) {
 export async function fetchGamesList() {
   let list = fallbackGames;
   try {
-    const res = await fetch('/games.json');
-    if (res.ok) {
+    const res = await fetch('./games.json').catch(() => fetch('/games.json'));
+    if (res && res.ok) {
       list = await res.json();
     }
   } catch (err) {
